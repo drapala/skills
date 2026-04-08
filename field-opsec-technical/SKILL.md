@@ -27,10 +27,32 @@ Layered technical defense for operating against state-level adversaries with ISP
 ## Devices
 
 ### Hardware Selection
-- **Burner laptop**: ThinkPad X series (open firmware, well-supported by Tails/Qubes). New or factory-wiped. Paid cash.
+- **Burner laptop**: Any x86_64 laptop works with Tails/Qubes. ThinkPad X series is well-tested, but any x86 machine (ASUS, Dell, Lenovo) is fine. **Apple Silicon (M1/M2/M3/M4/M5) does NOT run Tails or Qubes — x86 is mandatory.**
 - **Burner phone**: Android with unlockable bootloader (Pixel recommended for GrapheneOS). No Google account. SIM inserted only when needed.
 - **USB drives x2**: One for Tails OS, one for encrypted data exfil.
 - Never bring: daily-use laptop, phone with biometrics tied to real identity.
+
+### Tails Compatibility Check (run at home before travel)
+```bash
+# 1. BIOS: enable USB boot
+#    Boot into BIOS (usually F2/Del/F12) → Boot Order → USB first
+
+# 2. Disable Secure Boot
+#    BIOS → Security → Secure Boot → Disabled
+#    (Tails is not signed by Windows CA — Secure Boot will block boot)
+
+# 3. Verify RAM: Tails needs ≥2GB, works well at 4GB+
+#    Check: lshw -short | grep memory  (or check BIOS system info)
+
+# 4. Test full boot sequence at home:
+#    - Download Tails from tails.boum.org
+#    - Verify GPG signature (mandatory — never skip)
+#    - Flash to USB with balenaEtcher
+#    - Boot on burner hardware
+#    - Confirm Tor connects successfully
+#    If it boots and Tor works at home → it works in field
+```
+**Dedicated GPU (NVIDIA/AMD):** Tails uses the integrated GPU only — dedicated GPU is ignored. No security impact.
 
 ### Physical Hardening
 - Webcam: physical tape or mechanical cover
