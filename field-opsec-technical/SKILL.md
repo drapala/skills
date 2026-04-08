@@ -40,9 +40,9 @@ Layered technical defense for operating against state-level adversaries with ISP
 - Faraday bag for phone when not in use (blocks IMSI catcher passive tracking)
 
 ### Border Crossing Protocol
-- Power off devices completely before checkpoint (not sleep/hibernate — RAM retention attack)
-- iPhone: SOS mode (5x power button) before handing over — disables biometric unlock
-- Android (GrapheneOS): reboot to "Before First Unlock" state
+- **Power off completely** before checkpoint (not sleep/hibernate — RAM retention). "Before First Unlock" (BFU) state is the only safe state: Secure Enclave doesn't release keys, keychain inaccessible even with correct PIN.
+- **iPhone: power off completely** — do NOT use SOS mode. SOS mode only disables biometrics; device stays on, remains accessible via PIN under coercion. Power off = BFU.
+- **Android (GrapheneOS)**: reboot → do not unlock after reboot. BFU state.
 - Enable full-disk encryption BEFORE travel — can't be forced to encrypt at border
 - Use travel mode in 1Password — hides sensitive vaults
 - If compelled to unlock: only show the decoy OS/profile (see OS section)
@@ -93,19 +93,34 @@ You → VPN (Mullvad) → Tor (obfs4 bridge) → Destination
 
 **Why this order:** VPN hides from ISP that you're using Tor. Tor hides destination from VPN. Bridges hide Tor usage from deep packet inspection.
 
+> **Myanmar-specific warning:** MPT (Myanmar Posts and Telecommunications) and Mytel (joint venture with the military) use DPI equipment (Sandvine documented in the region). WireGuard and standard obfs4 may be fingerprintable. **Prefer Shadowsocks or V2Ray/VLESS** as VPN transport in Myanmar — they present as random HTTPS traffic and have much better evasion against Asian DPI than obfs4.
+
 ### VPN
 - **Mullvad**: accepts Monero/cash, no account required (account number only), audited no-log
-- **ProtonVPN**: fallback, accepts cash
 - Configure kill-switch: if VPN drops, no traffic leaks
-- Use WireGuard protocol — lower fingerprint than OpenVPN
+- **Transport preference for Myanmar**: Shadowsocks > obfs4 > WireGuard > OpenVPN
 - **Install and test BEFORE entering country** — downloading VPN in-country is a red flag
+
+### Shadowsocks Setup (Myanmar-preferred DPI bypass)
+```bash
+# Server (VPS):
+apt install shadowsocks-libev
+# /etc/shadowsocks-libev/config.json:
+# { "server":"0.0.0.0", "server_port":443, "password":"<strong>", "method":"chacha20-ietf-poly1305" }
+systemctl enable --now shadowsocks-libev
+
+# Client (Tails/Linux):
+apt install shadowsocks-libev
+ss-local -s <vps-ip> -p 443 -l 1080 -k <password> -m chacha20-ietf-poly1305
+# Then configure apps to use SOCKS5 127.0.0.1:1080
+```
 
 ### Tor + Bridge Configuration
 ```bash
 # In Tor Browser or Tails:
 # Use obfs4 bridges — traffic looks like random HTTPS
 # Obtain bridges at: bridges.torproject.org (do before travel)
-# Alternative bridge type: meek-azure (traffic looks like Azure CDN)
+# Alternative bridge type: meek-azure (traffic looks like Azure CDN) — good fallback
 ```
 - For Tails: configured in Tor Connection assistant at boot
 - Save bridge lines to encrypted USB before travel — can't fetch in-country if Tor is blocked
@@ -117,9 +132,10 @@ You → VPN (Mullvad) → Tor (obfs4 bridge) → Destination
 - Disable WiFi when not in use (passive probe requests reveal device history)
 
 ### Cellular / SIM
-- Local SIM = registered to passport in Myanmar — assume government has it
-- Use local SIM only for non-sensitive calls/navigation
-- Sensitive comms: WiFi only, through VPN+Tor stack
+- Local SIM = registered to passport in Myanmar — assume government has it **and has real-time access via MPT/Mytel**
+- **Do not use local SIM for GPS navigation** — it creates a timestamped location history tied to your passport. Use **OsmAnd or Maps.me with offline maps** (Myanmar maps available in both, download before travel)
+- Local SIM: only for non-sensitive voice calls when strictly necessary; keep off otherwise
+- Sensitive comms: WiFi only, through Shadowsocks/VPN+Tor stack
 - Enable airplane mode before entering sensitive locations — IMSI catcher requires active radio connection
 
 ### DNS
@@ -158,7 +174,9 @@ GPG-encrypted archives — for exfil
 ### VeraCrypt Hidden Volume
 - Outer volume: innocuous files, decoy password
 - Hidden volume: sensitive data, real password
-- Under coercion: give decoy password — hidden volume is cryptographically invisible
+- Hidden volume is cryptographically invisible to forensic analysis of the device **without you present**
+- **CRITICAL LIMITATION:** This does NOT protect you if you are present and under physical coercion. An adversary who can apply violence does not need to break the crypto — they apply pressure to you. VeraCrypt hidden volume protects against device seizure without you, not against interrogation.
+- Additional forensic risk: if adversary images the disk before coercion, they can detect a hidden volume by comparing before/after sector changes after you provide the outer password. Never unlock the outer volume after seizure.
 - Tutorial: veracrypt.fr/en/hidden-volume.html
 
 ### Sensitive Data Handling
@@ -167,7 +185,7 @@ GPG-encrypted archives — for exfil
   ```bash
   onionshare --receive  # creates .onion drop point
   ```
-- **Wipe after exfil**: `shred -u file` or `wipe` — simple `rm` is recoverable
+- **Wipe after exfil**: `shred -u file` works on **HDDs only**. On **SSDs (NVMe/SATA SSD)** — which includes most ThinkPad X series — `shred` does NOT guarantee secure deletion due to wear leveling. Reliable wipe on SSD requires either: (a) full-disk encryption from the start (then deleting the key is sufficient), or (b) `hdparm --security-erase` (ATA Secure Erase) for the whole drive. For individual files on SSD, only FDE from the start makes deletion reliable.
 
 ### Photo/Video Metadata
 ```bash
@@ -233,7 +251,7 @@ NETWORK
 
 IDENTITY
 [ ] 1Password travel mode enabled (sensitive vaults hidden)
-[ ] Biometrics disabled or SOS mode tested
+[ ] Biometrics disabled — device powered off completely (BFU state) before any checkpoint. DO NOT use iPhone SOS mode.
 [ ] Decoy OS/profile prepared
 
 COMMS

